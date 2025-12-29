@@ -154,8 +154,8 @@ def sable_clean_up_armature(obj: bpy.types.Object, deleteBones: list, scene: bpy
         for bone in armature.edit_bones:
             boneName = bone.name
             
-            ### Remove bones with 
-            if bone.name.startswith("[") and boneName.endswith("]"):
+            ### Remove bones with [] and <>
+            if (bone.name.startswith("[") and boneName.endswith("]")) or (bone.name.startswith("<") and boneName.endswith(">")):
 
                 #armature.edit_bones.remove(bone)
                 sable_remove_bones_R(armature, bone)
@@ -164,7 +164,7 @@ def sable_clean_up_armature(obj: bpy.types.Object, deleteBones: list, scene: bpy
             ### Remove specified bones to delete
             if bone.name in deleteBones:
                 sable_remove_bones_R(armature, bone)
-                continue                
+                continue          
 
         obj.update_from_editmode()
 
@@ -185,6 +185,9 @@ def sable_improve_imports(context, fileInfos : SableFileInfo):
         ### Check to see if there is an armature to merge into and create existingObjectSet
         baseMergeArmature = None
         for obj in scn.objects:
+            # Ignore objects that are in the file but not really in the scene
+            if obj.name not in scn.objects:
+                continue
             existingObjectsSet.add(obj)
             if obj.type == "ARMATURE":
                 if baseMergeArmature == None:
@@ -197,11 +200,22 @@ def sable_improve_imports(context, fileInfos : SableFileInfo):
             else:
                 bpy.data.objects.remove(obj)                    
                 
-        ### Get list of pre-exiting materials with name
+        ### Get list of pre-exiting materials with [S] names and already on pre-existing objects
         for mat in bpy.data.materials:
             # Split out the . from the material name (happens when blender loads in a material of same name)
             splitName = mat.name.split('.')
-            existingMaterialsDictionary[splitName[0]] = mat
+            if splitName[0].endswith("[S]"):
+                existingMaterialsDictionary[splitName[0]] = mat
+        
+        for obj in scn.objects:
+            if obj in existingObjectsSet:
+                for materialSlot in obj.material_slots:
+                    #print("Obj " + obj.name + " Material Slot[" + str(materialSlot.slot_index) + "] " + materialSlot.name)
+                    matName = materialSlot.name.split('.')[0]
+
+                    print("Pre-Existing Matname: " + matName)
+
+                    existingMaterialsDictionary[matName] = materialSlot.material
 
         ### Parse out imports to offset
         importsToOffset = set()
@@ -327,7 +341,7 @@ def sable_improve_imports(context, fileInfos : SableFileInfo):
                     obj.select_set(True)
                     bpy.context.view_layer.objects.active = obj'''
 
-        ### Delete any unused materials
+        ### Combine any combinable materials
         materialNameToMaterialDictionary = {} #<string (material name), Material>
         for obj in scn.objects:
             if (obj not in existingObjectsSet):
@@ -336,18 +350,17 @@ def sable_improve_imports(context, fileInfos : SableFileInfo):
                         #print("Obj " + obj.name + " Material Slot[" + str(materialSlot.slot_index) + "] " + materialSlot.name)
                         matName = materialSlot.name.split('.')[0]
 
-                        # Attempt to find simularliy named pre-existing material and swap out material for that
-                        if matName.endswith("[S]"):
-                            if matName in existingMaterialsDictionary:
-                                materialSlot.material = existingMaterialsDictionary[matName]
-                                continue
+                        # Attempt to find similarly named pre-existing material and swap out material for that
+                        if matName in existingMaterialsDictionary:
+                            materialSlot.material = existingMaterialsDictionary[matName]
+                            continue
 
-                    # Check to see if this material of the same name already esists on the model, if so, then set the slot to that material
-                    if matName not in materialNameToMaterialDictionary:
-                        materialNameToMaterialDictionary[matName] = materialSlot.material
-                        continue
-                
-                    materialSlot.material = materialNameToMaterialDictionary[matName]
+                        # Check to see if this material of the same name already exists on the model, if so, then set the slot to that material
+                        if matName not in materialNameToMaterialDictionary:
+                            materialNameToMaterialDictionary[matName] = materialSlot.material
+                            continue
+                    
+                        materialSlot.material = materialNameToMaterialDictionary[matName]
 
 
         ### Remove all unlinked materials
@@ -382,6 +395,21 @@ def sable_improve_imports(context, fileInfos : SableFileInfo):
         ### Clean up any remaining items
         bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
 
+        ### Clean up material names <3
+        for mat in bpy.data.materials:                     
+            mat.name = mat.name.split('.')[0]
+
+        ### Remove any UVMaps not named exactly "UVMap" (unless its the only one)
+        for obj in scn.objects:
+            if obj.type == "MESH":
+                i = len(obj.data.uv_layers) - 1
+                while i > 0:
+                    UVMap =  obj.data.uv_layers[i]
+                    print("Trying to delete UV Map")
+                    obj.data.uv_layers.remove(UVMap)
+                    i -= 1                 
+
+ 
         ### Adjust Tail of Toe bones'z Z value to equal 0
         bpy.ops.object.mode_set(mode='OBJECT')
         bpy.ops.object.select_all(action='DESELECT')
